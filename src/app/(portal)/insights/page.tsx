@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { Card, Hero, Page, Pill } from "@/components/ui";
+import ScrollStory from "@/components/motion/ScrollStory";
 
 const COMPARE: [string, string, string][] = [
   ["Measures the Google Maps (“places”) results", "Not in the reports you shared: they track the normal blue-link results", "Yes: a rank grid across Geelong, Bellarine & Surf Coast, re-run on demand"],
@@ -17,14 +18,15 @@ export default function Insights() {
       <Hero kicker="Answering your questions" title="Why you're on page 1 but not in the map">
         You&apos;re right that it doesn&apos;t add up. Here&apos;s what&apos;s actually going on, with the evidence.
       </Hero>
+      <ScrollStory>
       <Page>
         <Card title="1 · Google shows two different sets of results">
           <div className="grid gap-4 md:grid-cols-2">
-            <div className="rounded-[6px] bg-paper p-4">
+            <div data-story="slide-l" className="rounded-[6px] bg-paper p-4">
               <p className="font-display text-orange-deep">The map (“places”)</p>
               <p className="mt-1 text-sm">The three businesses with pins, shown <b>above</b> everything else. For a local trade like yours this is where most calls come from. You&apos;re not showing here for “trailer manufacturers Geelong”.</p>
             </div>
-            <div className="rounded-[6px] bg-paper p-4">
+            <div data-story="slide-r" className="rounded-[6px] bg-paper p-4">
               <p className="font-display">The normal blue links</p>
               <p className="mt-1 text-sm">The website results underneath. This is what the Thryv dashboard measures (“100% of tracked keywords on page 1”). Your site <i>does</i> appear here, but below the map.</p>
             </div>
@@ -34,10 +36,10 @@ export default function Insights() {
 
         <Card title="2 · How Google picks the three map results">
           <p className="text-sm">Google says it uses three things (<a className="underline" href="https://support.google.com/business/answer/7091" target="_blank" rel="noreferrer">Google Business Profile help: “How Google determines local ranking”</a>):</p>
-          <ul className="mt-3 grid gap-3 text-sm md:grid-cols-3">
-            <li className="rounded-[6px] border border-line p-3"><b className="font-display">Relevance</b><br />Does the listing match the search? Mostly driven by the <b>primary category</b> on your Google profile, then services, business description and your website.</li>
-            <li className="rounded-[6px] border border-line p-3"><b className="font-display">Distance</b><br />How close you are to the person searching.</li>
-            <li className="rounded-[6px] border border-line p-3"><b className="font-display">Prominence</b><br />How well known you are: reviews (number, rating, how recent), links, directory listings, activity.</li>
+          <ul data-story="pillars" className="mt-3 grid gap-3 text-sm md:grid-cols-3">
+            <li data-pillar className="rounded-[6px] border border-line p-3"><b className="font-display">Relevance</b><br />Does the listing match the search? Mostly driven by the <b>primary category</b> on your Google profile, then services, business description and your website.</li>
+            <li data-pillar className="rounded-[6px] border border-line p-3"><b className="font-display">Distance</b><br />How close you are to the person searching.</li>
+            <li data-pillar className="rounded-[6px] border border-line p-3"><b className="font-display">Prominence</b><br />How well known you are: reviews (number, rating, how recent), links, directory listings, activity.</li>
           </ul>
         </Card>
 
@@ -46,21 +48,21 @@ export default function Insights() {
           <div className="mt-3 grid gap-4 md:grid-cols-2">
             <div className="rounded-[6px] border border-line p-3">
               <p className="font-display text-sm">“towbars geelong”</p>
-              <ol className="mt-2 space-y-1 text-sm">
-                <li className="font-semibold text-good">1. F Sparks &amp; Sons ← you</li>
+              <ol data-story="rank-list" className="mt-2 space-y-1 text-sm">
+                <li data-story="you-good" className="-mx-1.5 rounded-[4px] px-1.5 font-semibold text-good">1. F Sparks &amp; Sons ← you</li>
                 <li>2. West Coast Trailers</li>
                 <li>3. Geelong 4WD and Camping</li>
               </ol>
             </div>
             <div className="rounded-[6px] border border-line p-3">
               <p className="font-display text-sm">“trailer manufacturers geelong”</p>
-              <ol className="mt-2 space-y-1 text-sm">
+              <ol data-story="rank-list" className="mt-2 space-y-1 text-sm">
                 <li>1. Geelong Standard Trailers</li>
                 <li>2. Trailer &amp; Trailers Geelong</li>
                 <li>3. Ultimate Plant Trailers</li>
                 <li className="text-muted">4. West Coast Trailers</li>
                 <li className="text-muted">5. Pacific Trailers</li>
-                <li className="font-semibold text-bad">6. F Sparks &amp; Sons ← you (#5–6 at every point scanned)</li>
+                <li data-story="you-bad" className="-mx-1.5 rounded-[4px] px-1.5 font-semibold text-bad">6. F Sparks &amp; Sons ← you (#5–6 at every point scanned)</li>
               </ol>
             </div>
           </div>
@@ -69,7 +71,7 @@ export default function Insights() {
             is a dedicated trailer builder. West Coast Trailers is at <b>67 Douro St</b>, a few streets from you, so distance isn&apos;t the difference, and as you said, they aren&apos;t
             especially active on Google either. The difference is <b>relevance</b>: how Google categorises each business.
           </p>
-          <p className="mt-3 rounded-[6px] bg-orange-tint p-3 text-sm">
+          <p data-story="rise" className="mt-3 rounded-[6px] bg-orange-tint p-3 text-sm">
             <b>The likely fix:</b> set the primary and secondary categories on your Google profile so they cover trailer manufacturing as well as towbars, and back it up with a stronger
             trailer-manufacturing page on the website. An industry survey of local search experts ranks a wrong primary category as the <b>#2 thing that holds a business back</b> in the map
             (<a className="underline" href="https://whitespark.ca/local-search-ranking-factors/" target="_blank" rel="noreferrer">Whitespark 2026</a>). With manager access we can confirm your
@@ -107,7 +109,7 @@ export default function Insights() {
               </thead>
               <tbody>
                 {COMPARE.map(([k, a, b]) => (
-                  <tr key={k}>
+                  <tr key={k} data-story="rise">
                     <td className="font-medium">{k}</td>
                     <td className="text-muted">{a}</td>
                     <td>{b}</td>
@@ -123,6 +125,7 @@ export default function Insights() {
           </div>
         </Card>
       </Page>
+      </ScrollStory>
     </>
   );
 }

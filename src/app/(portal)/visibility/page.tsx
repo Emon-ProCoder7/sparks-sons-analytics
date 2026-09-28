@@ -2,17 +2,20 @@
 
 import dynamic from "next/dynamic";
 import { useMemo, useState } from "react";
+import { motion } from "motion/react";
 import { Card, Hero, Notice, Page, NotConnected } from "@/components/ui";
 import { n8n, useN8n } from "@/lib/useN8n";
 import { BUSINESS, DEFAULT_KEYWORDS } from "@/lib/site";
 import type { GridJob, Settings } from "@/lib/types";
 
 const GridMap = dynamic(() => import("@/components/GridMap"), { ssr: false, loading: () => <div className="h-[460px] animate-pulse rounded-[6px] bg-line" /> });
+const GridSkyline = dynamic(() => import("@/components/GridSkyline"), { ssr: false, loading: () => <div className="h-[460px] animate-pulse rounded-[6px] bg-line" /> });
 
 export default function Visibility() {
   const settings = useN8n<Settings>("settings.get");
   const jobs = useN8n<GridJob[]>("grid.jobs", undefined, 15_000);
   const [selected, setSelected] = useState<string | null>(null);
+  const [view, setView] = useState<"3d" | "map">("3d");
 
   const [keyword, setKeyword] = useState(DEFAULT_KEYWORDS[0]);
   const [gridSize, setGridSize] = useState(5);
@@ -100,7 +103,19 @@ export default function Visibility() {
             >
               {job?.status === "done" ? (
                 <>
-                  <GridMap points={job.points} center={[job.centerLat, job.centerLng]} depth={job.depth} business={[BUSINESS.lat, BUSINESS.lng]} />
+                  <div role="tablist" aria-label="Result view" className="mb-3 inline-flex rounded-[6px] border border-line p-0.5">
+                    {([["3d", "3D skyline"], ["map", "Map"]] as const).map(([v, l]) => (
+                      <button key={v} role="tab" aria-selected={view === v} onClick={() => setView(v)} className={`font-display relative rounded-[4px] px-3 py-1 text-xs transition-colors ${view === v ? "text-ink" : "text-muted hover:text-ink"}`}>
+                        {view === v && <motion.span layoutId="grid-view" className="absolute inset-0 rounded-[4px] bg-orange" transition={{ type: "spring", stiffness: 420, damping: 34 }} />}
+                        <span className="relative">{l}</span>
+                      </button>
+                    ))}
+                  </div>
+                  {view === "3d" ? (
+                    <GridSkyline points={job.points} depth={job.depth} gridSize={job.gridSize} spacingKm={job.spacingKm} center={[job.centerLat, job.centerLng]} business={[BUSINESS.lat, BUSINESS.lng]} />
+                  ) : (
+                    <GridMap points={job.points} center={[job.centerLat, job.centerLng]} depth={job.depth} business={[BUSINESS.lat, BUSINESS.lng]} />
+                  )}
                   <div className="mt-4 grid grid-cols-3 gap-3 text-center">
                     <div><p className="font-display text-3xl text-good">{summary!.top3}</p><p className="text-xs text-muted">points in top 3</p></div>
                     <div><p className="font-display text-3xl">{summary!.found}/{job.points.length}</p><p className="text-xs text-muted">points found at all</p></div>

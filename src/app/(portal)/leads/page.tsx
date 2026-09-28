@@ -174,7 +174,7 @@ export default function Leads() {
               <p className="text-sm"><b>{queries.length}</b> Google Maps searches · up to <b>{queries.length * maxPerQuery}</b> listings checked · about <b>{mins} min</b></p>
               <details className="mt-2 text-xs">
                 <summary className="cursor-pointer text-muted">See every search</summary>
-                <ul className="mt-1 max-h-40 overflow-y-auto">{queries.map((q) => <li key={q.query}>{q.query}</li>)}</ul>
+                <ul data-lenis-prevent className="mt-1 max-h-40 overflow-y-auto">{queries.map((q) => <li key={q.query}>{q.query}</li>)}</ul>
               </details>
               <label className="mt-3 flex items-start gap-2 text-sm">
                 <input type="checkbox" className="mt-1" checked={ack} onChange={(e) => setAck(e.target.checked)} />
@@ -231,7 +231,7 @@ export default function Leads() {
               marked “auto-extracted” come from the business&apos;s own website; spot-check before relying on them.
             </p>
             {rows.error && <Notice tone="error">{rows.error}</Notice>}
-            <div className="max-h-[560px] overflow-auto">
+            <div data-lenis-prevent className="max-h-[560px] overflow-auto">
               <table className="data min-w-[1100px]">
                 <thead className="sticky top-0 bg-white"><tr><th>Business</th><th>Suburb</th><th>Phone</th><th>Verified</th><th>Email</th><th>Reviews</th><th>Decision-maker</th><th>Size</th></tr></thead>
                 <tbody>

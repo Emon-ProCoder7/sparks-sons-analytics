@@ -52,7 +52,8 @@ export default function Overview() {
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
           <Stat
             label="Top-3 on Google Maps"
-            value={inPack === null ? "—" : `${inPack}/${lastGrid!.points.length}`}
+            value="—"
+            count={inPack === null ? undefined : { to: inPack, after: `/${lastGrid!.points.length}` }}
             meaning={lastGrid ? `Grid points where you're in the top 3 for “${lastGrid.keyword}”. The top 3 is what people see without scrolling.` : "Run a Maps Rank Grid to see where you appear on the map around Geelong."}
             state={!connected ? "off" : lastGrid ? "live" : "off"}
             stateLabel={!connected ? "Not connected" : lastGrid ? `Scanned ${new Date(lastGrid.createdAt).toLocaleDateString("en-AU", { day: "numeric", month: "short" })}` : "No scan yet"}
@@ -60,35 +61,43 @@ export default function Overview() {
           />
           <Stat
             label="Website health"
-            value={`${SNAP.score}/100`}
+            count={{ to: SNAP.score, after: "/100" }}
+            delay={0.06}
             meaning={`${SNAP.findings.length + OFFSITE_FINDINGS.length} issues found, ${priorities.length} of them high priority. See Website Health.`}
             state={liveAudit ? "live" : "snapshot"}
             stateLabel={liveAudit?.createdAt ? `Audited ${new Date(liveAudit.createdAt).toLocaleDateString("en-AU", { day: "numeric", month: "short" })}` : "Snapshot 28 Sep"}
           />
           <Stat
             label="Google clicks · 28 days"
-            value={clicks === undefined ? "—" : clicks.toLocaleString()}
+            value="—"
+            count={clicks === undefined ? undefined : { to: clicks, separator: "," }}
+            delay={0.12}
             meaning="People who clicked through to the website from Google search (Search Console, not estimates)."
             state={!connected ? "off" : gsc.data?.rows ? liveState : "off"}
             stateLabel={!connected ? "Not connected" : gsc.data?.rows ? liveLabel : "Not synced"}
           />
           <Stat
             label="Leads found"
-            value={leadCount === undefined ? "—" : leadCount.toLocaleString()}
+            value="—"
+            count={leadCount === undefined ? undefined : { to: leadCount, separator: "," }}
+            delay={0.18}
             meaning="Local businesses found by the Lead Finder that may buy trailers, towbars or parts."
             state={!connected ? "off" : leads.data?.length ? "live" : "off"}
             stateLabel={!connected ? "Not connected" : leads.data?.length ? "Live" : "No runs yet"}
           />
           <Stat
             label="Posts awaiting approval"
-            value={drafts === undefined ? "—" : drafts}
+            value="—"
+            count={drafts === undefined ? undefined : { to: drafts }}
+            delay={0.24}
             meaning="Google/Facebook posts drafted for you. Nothing is published until you tick approve."
             state={!connected ? "off" : "live"}
             stateLabel={!connected ? "Not connected" : "Live"}
           />
           <Stat
             label="Reviews on Google"
-            value="4.4★ · 87"
+            count={{ to: 87, before: "4.4★ · " }}
+            delay={0.3}
             meaning="As shown in your Thryv Marketing Center (Sep 2026). A steady trickle of new reviews matters more than the total."
             state="snapshot"
             stateLabel="From Thryv screenshot"
@@ -114,7 +123,7 @@ export default function Overview() {
             </div>
           </Card>
 
-          <Card title="Recent activity" state={connected ? "live" : "off"} stateLabel={connected ? "Live" : "Not connected"}>
+          <Card delay={0.1} title="Recent activity" state={connected ? "live" : "off"} stateLabel={connected ? "Live" : "Not connected"}>
             {!activity.data?.length ? (
               <p className="text-sm text-muted">{connected ? "Nothing yet. Every scan, post and send will be logged here." : "Activity appears once n8n is connected."}</p>
             ) : (

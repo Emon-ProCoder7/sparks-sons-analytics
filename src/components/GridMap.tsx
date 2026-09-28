@@ -4,13 +4,7 @@ import "leaflet/dist/leaflet.css";
 import L from "leaflet";
 import { MapContainer, Marker, TileLayer, Tooltip } from "react-leaflet";
 import type { GridPoint } from "@/lib/types";
-
-export function rankColor(rank: number | null) {
-  if (rank === null) return "#9a9a9a";
-  if (rank <= 3) return "#1f8a4c";
-  if (rank <= 10) return "#b7791f";
-  return "#c53030";
-}
+import { rankColor } from "@/lib/rank";
 
 function icon(rank: number | null, depth: number) {
   const label = rank === null ? `${depth}+` : String(rank);
