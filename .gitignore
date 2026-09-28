@@ -43,3 +43,6 @@ n8n/dist/
 !.env.example
 worker/__pycache__/
 worker/data/
+
+.vercel
+.env*
