@@ -388,12 +388,15 @@ const cands = $('Build candidates').all().map(i => i.json);
 const meta = cands[0].meta;
 const leads = cands.filter(l => !l.empty);
 const homes = $('Fetch homepage').all();
+const abouts = $('Fetch about page').all();
+const teams = $('Fetch team page').all();
 const contacts = $input.all();
 const out = leads.map((l, i) => {
   const home = String((homes[i] && homes[i].json.data) || '');
   const contact = String((contacts[i] && contacts[i].json.data) || '');
-  const raw = home + ' ' + contact;
-  const text = toText(home) + ' | ' + toText(contact);
+  const about = String((abouts[i] && abouts[i].json.data) || '') + ' ' + String((teams[i] && teams[i].json.data) || '');
+  const raw = home + ' ' + contact + ' ' + about;
+  const text = toText(home) + ' | ' + toText(contact) + ' | ' + toText(about);
   let pv = '';
   if (!l.website) pv = l.phone ? 'no website found — phone from Google Maps only' : '';
   else if (!home) pv = 'No (website unreachable)';
@@ -433,9 +436,16 @@ const summary = {
   widenedInto: c.widenedInto, widenReason: c.reason, message,
 };
 return [{ json: { rows, summary } }];`);
+  // From each homepage, pick up to 2 same-site About/Team/Story links (one item in, one item out, so pairing holds).
+  const findAbout = w.add("Find about/team links", "n8n-nodes-base.code", 2, {
+    mode: "runOnceForEachItem",
+    jsCode: readFileSync(join(ROOT, "n8n", "code", "find-about-links.js"), "utf8"),
+  });
+  const about1 = fetchPage(w, "Fetch about page", "={{ $json.about1 || 'http://no-website.invalid' }}");
+  const about2 = fetchPage(w, "Fetch team page", "={{ $('Find about/team links').item.json.about2 || 'http://no-website.invalid' }}");
   w.link(build, home);
   w.chain(
-    home, contact, verify,
+    home, findAbout, about1, about2, contact, verify,
     dt(w, "Store results", "sparks_lead_results", "upsert", { filter: eqFilter("jobId", "$json.summary.jobId"), body: "{jobId:$json.summary.jobId,rows_object:JSON.stringify($json.rows)}" }),
     dt(w, "Mark done", "sparks_lead_jobs", "upsert", {
       filter: eqFilter("jobId", "$('Verify and rank').first().json.summary.jobId"),
