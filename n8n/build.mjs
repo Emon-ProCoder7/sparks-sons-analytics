@@ -535,7 +535,7 @@ return [{ json: { ...j, status, points, createdAt: $('Record scan').first().json
 function searchConsole() {
   const w = workflow("Sparks · Search Console");
   w.lane();
-  w.note("## Sparks · Search Console\nPulls real search queries from Google Search Console daily and on demand.\n**Setup:** create an *OAuth2 API* credential for Google with scope `https://www.googleapis.com/auth/webmasters.readonly`, select it on **Query Search Console**, and set the property in portal Settings.", undefined, [400, 230]);
+  w.note("## Sparks · Search Console\nPulls real search queries from Google Search Console daily and on demand.\n**Setup:** create a *Google Search Console OAuth2 API* credential in n8n (the build picks it up automatically) and set the property in portal Settings.", undefined, [400, 230]);
   const sync = hook(w, "Sync now", "POST", "sparks/gsc/sync");
   const sched = w.add("Daily 6am", "n8n-nodes-base.scheduleTrigger", 1.2, { rule: { interval: [{ triggerAtHour: 6 }] } });
   const settings = kvGet(w, "Read settings", "settings");
@@ -553,13 +553,13 @@ return [{ json: { property: s.gscProperty || 'sc-domain:sparks.com.au', days, st
   const q = w.add("Query Search Console", "n8n-nodes-base.httpRequest", 4.2, {
     method: "POST",
     url: "={{ 'https://www.googleapis.com/webmasters/v3/sites/' + encodeURIComponent($json.property) + '/searchAnalytics/query' }}",
-    authentication: "genericCredentialType",
-    genericAuthType: "oAuth2Api",
+    authentication: "predefinedCredentialType",
+    nodeCredentialType: "googleSearchConsoleOAuth2Api",
     sendBody: true,
     specifyBody: "json",
     jsonBody: "={{ JSON.stringify({ startDate: $json.startDate, endDate: $json.endDate, dimensions: ['query'], rowLimit: 1000 }) }}",
     options: { timeout: 30000 },
-  }, { onError: "continueErrorOutput" });
+  }, { credentials: C.gsc ? { googleSearchConsoleOAuth2Api: C.gsc } : undefined, onError: "continueErrorOutput" });
   w.chain(settings, range, q);
   const shape = code(w, "Shape result", `
 const r = $('Work out date range').first().json;
@@ -897,6 +897,7 @@ async function main() {
     n8nApi: await headerCred("Sparks · n8n API", "X-N8N-API-KEY", KEY || "dry"),
     openAi: await findCred("openAiApi"),
     serp: await findCredByName("Sparks SerpApi"),
+    gsc: await findCred("googleSearchConsoleOAuth2Api"),
   };
   if (!C.serp) throw new Error('Create the n8n credential "Sparks SerpApi" (type SerpApi) first');
   if (!C.openAi) console.warn("! no OpenAI credential found — assign one to the 'Write drafts' / 'Write reply' nodes");
