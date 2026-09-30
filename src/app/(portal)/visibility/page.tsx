@@ -14,6 +14,7 @@ const GridSkyline = dynamic(() => import("@/components/GridSkyline"), { ssr: fal
 export default function Visibility() {
   const settings = useN8n<Settings>("settings.get");
   const jobs = useN8n<GridJob[]>("grid.jobs", undefined, 15_000);
+  const quota = useN8n<{ left?: number; perMonth?: number }>("quota.get");
   const [selected, setSelected] = useState<string | null>(null);
   const [view, setView] = useState<"3d" | "map">("3d");
 
@@ -38,7 +39,7 @@ export default function Visibility() {
     });
     setBusy(false);
     if (!r.ok) return setMsg({ tone: "error", text: r.error });
-    setMsg({ tone: "ok", text: `Scan started: ${gridSize * gridSize} map searches. This takes roughly ${Math.ceil((gridSize * gridSize * 12) / 60)} minutes.` });
+    setMsg({ tone: "ok", text: `Scan started: ${gridSize * gridSize} map searches. This usually takes under a minute.` });
     setSelected(r.data?.jobId ?? null);
     jobs.reload();
   }
@@ -85,15 +86,15 @@ export default function Visibility() {
             <div><label className="label" htmlFor="lat">Centre latitude</label><input id="lat" className="field" value={lat} onChange={(e) => setLat(e.target.value)} /></div>
             <div><label className="label" htmlFor="lng">Centre longitude</label><input id="lng" className="field" value={lng} onChange={(e) => setLng(e.target.value)} /></div>
             <div className="flex items-end md:col-span-2">
-              <button className="btn btn-primary" onClick={start} disabled={busy || !keyword.trim()}>{busy ? "Starting…" : `Run ${gridSize * gridSize}-point scan`}</button>
+              <button className="btn btn-primary" onClick={start} disabled={busy || !keyword.trim() || (typeof quota.data?.left === "number" && gridSize * gridSize > quota.data.left)}>{busy ? "Starting…" : `Run ${gridSize * gridSize}-point scan`}</button>
             </div>
           </div>
-          <p className="mt-3 text-xs text-muted">Default centre is 80 Cowie St, North Geelong. Covers about {((gridSize - 1) * spacingKm).toFixed(0)} km edge to edge.</p>
+          <p className="mt-3 text-xs text-muted">Default centre is 80 Cowie St, North Geelong. Covers about {((gridSize - 1) * spacingKm).toFixed(0)} km edge to edge. Uses {gridSize * gridSize} Google Maps searches{typeof quota.data?.left === "number" ? ` (${quota.data.left} left this month)` : ""}.</p>
           {msg && <div className="mt-3"><Notice tone={msg.tone}>{msg.text}</Notice></div>}
         </Card>
 
         {!jobs.connected ? (
-          <NotConnected what="Maps rank grid" how="Runs on the n8n automation server and the Maps worker. Connect them in Settings, then scans appear here." />
+          <NotConnected what="Maps rank grid" how="Runs on the n8n automation server (Google Maps data via SerpApi). Connect n8n in Settings, then scans appear here." />
         ) : (
           <div className="grid gap-4 xl:grid-cols-[1fr_320px]">
             <Card

@@ -9,11 +9,11 @@ export const ROUTES = {
   "settings.get": { method: "GET", path: "sparks/settings", write: false },
   "settings.save": { method: "POST", path: "sparks/settings", write: true },
   "activity.list": { method: "GET", path: "sparks/activity", write: false },
+  "quota.get": { method: "GET", path: "sparks/serpapi/quota", write: false },
 
   "leads.start": { method: "POST", path: "sparks/leads/start", write: true },
   "leads.jobs": { method: "GET", path: "sparks/leads/jobs", write: false },
   "leads.rows": { method: "GET", path: "sparks/leads/rows", write: false },
-  "leads.resume": { method: "POST", path: "sparks/leads/resume", write: true },
 
   "grid.start": { method: "POST", path: "sparks/grid/start", write: true },
   "grid.jobs": { method: "GET", path: "sparks/grid/jobs", write: false },

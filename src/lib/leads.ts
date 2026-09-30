@@ -24,9 +24,9 @@ export function buildQueries(categories: LeadConfig["categories"], suburbs: stri
   return out;
 }
 
-/** Rough wall-clock estimate: ~5s per result opened + 6s per query, run one query at a time. */
+/** Rough wall-clock estimate: ~2s per Google Maps search plus ~1s per website checked (8 at a time). */
 export function estimateMinutes(queryCount: number, maxPerQuery: number) {
-  return Math.ceil((queryCount * (6 + maxPerQuery * 5)) / 60);
+  return Math.max(1, Math.ceil((queryCount * 2 + (queryCount * maxPerQuery) / 4) / 60));
 }
 
 function cell(v: string | undefined) {

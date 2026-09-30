@@ -29,7 +29,7 @@ Errors come back as readable JSON with 4xx codes. 424 means "a connected service
 
 ## Connecting the remaining services (in the n8n UI)
 
-1. **Maps worker**: deploy `worker/` (see worker/README.md), put its URL in `.env.local` as `WORKER_URL`, re-run the build.
+1. **Google Maps data**: create an n8n credential of type SerpApi named exactly **Sparks SerpApi** (free plan: 250 searches a month, no card). The build refuses to run without it. A 3×3 rank scan uses 9 searches; a lead run uses one search per query (capped at 60).
 2. **Search Console**: create an *OAuth2 API* credential (Google auth URL `https://accounts.google.com/o/oauth2/v2/auth`,
    token URL `https://oauth2.googleapis.com/token`, scope `https://www.googleapis.com/auth/webmasters.readonly`,
    auth query `access_type=offline&prompt=consent`) and select it on **Query Search Console**.

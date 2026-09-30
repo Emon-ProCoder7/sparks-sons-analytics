@@ -67,6 +67,12 @@ async function headerCred(name, header, value, force = false) {
   console.log(`credential created: ${name}`);
   return { id: c.id, name };
 }
+async function findCredByName(name) {
+  if (DRY) return { id: "dry", name };
+  const list = (await api("GET", "/credentials?limit=250")).data ?? [];
+  const c = list.find((x) => x.name === name);
+  return c ? { id: c.id, name: c.name } : null;
+}
 async function findCred(type) {
   if (DRY) return { id: "dry", name: type };
   const list = (await api("GET", "/credentials?limit=250")).data ?? [];
@@ -214,14 +220,58 @@ function portalCore() {
 
   w.lane();
   w.chain(hook(w, "GET activity", "GET", "sparks/activity"), dt(w, "Read activity", "sparks_activity", "list", { limit: 40 }), respond(w, "Return activity", "={{ $json.data }}"));
+
+  // SerpApi budget (account endpoint does not use a search)
+  w.lane();
+  w.chain(
+    hook(w, "GET search budget", "GET", "sparks/serpapi/quota"),
+    w.add("SerpApi account", "n8n-nodes-base.httpRequest", 4.2, { method: "GET", url: "https://serpapi.com/account.json", authentication: "predefinedCredentialType", nodeCredentialType: "serpApi", options: { timeout: 15000 } }, { credentials: { serpApi: C.serp }, onError: "continueRegularOutput" }),
+    respond(w, "Return budget", "={{ { plan: $json.plan_name, perMonth: $json.searches_per_month, left: $json.plan_searches_left ?? $json.total_searches_left, usedThisMonth: $json.this_month_usage, error: $json.error ? String($json.error.message || $json.error) : undefined } }}"),
+  );
   return w;
 }
 
-// ================================================================== 2. Lead Finder
+// ================================================================== 2. Lead Finder (SerpApi, all in n8n)
+const LIB = readFileSync(join(ROOT, "n8n", "code", "lib-leads.js"), "utf8");
+const MAX_SEARCHES_PER_RUN = 60; // SerpApi free plan = 250 searches/month
+const MAX_VERIFY = 300; // websites crawled per run; keeps the n8n execution light
+
+/** Google Maps search through SerpApi (credential "Sparks SerpApi"). One call per input item. */
+function serpMaps(w, name, qExpr, llExpr) {
+  const q = [
+    { name: "engine", value: "google_maps" },
+    { name: "type", value: "search" },
+    { name: "q", value: qExpr },
+    { name: "hl", value: "en" },
+    { name: "gl", value: "au" },
+  ];
+  if (llExpr) q.push({ name: "ll", value: llExpr });
+  return w.add(name, "n8n-nodes-base.httpRequest", 4.2, {
+    method: "GET",
+    url: "https://serpapi.com/search.json",
+    authentication: "predefinedCredentialType",
+    nodeCredentialType: "serpApi",
+    sendQuery: true,
+    queryParameters: { parameters: q },
+    options: { timeout: 60000, batching: { batch: { batchSize: 1, batchInterval: 400 } } },
+  }, { credentials: { serpApi: C.serp }, retryOnFail: true, maxTries: 2, waitBetweenTries: 2000, onError: "continueRegularOutput" });
+}
+
+const fetchPage = (w, name, urlExpr) =>
+  w.add(name, "n8n-nodes-base.httpRequest", 4.2, {
+    method: "GET",
+    url: urlExpr,
+    sendHeaders: true,
+    headerParameters: { parameters: [{ name: "User-Agent", value: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36" }] },
+    options: { timeout: 12000, batching: { batch: { batchSize: 8, batchInterval: 150 } }, response: { response: { neverError: true, responseFormat: "text" } } },
+  }, { onError: "continueRegularOutput" });
+
+const leadRow = `(r, q) => ({ name: r.title, phone: r.phone || '', website: r.website || '', address: r.address || '', rating: r.rating ?? '', reviews: r.reviews ?? '', category: r.type || '', leadCategory: q.category, suburb: q.suburb, query: q.query })`;
+
 function leadFinder() {
   const w = workflow("Sparks · Lead Finder");
   w.lane();
-  w.note("## Sparks · Lead Finder\nPortal → validate → Maps worker (Playwright on RepoCloud) runs the scrape → worker calls back `sparks/worker/leads` with progress and the final result → stored in Data Tables → portal reads it.\nWorker URL lives in sparks_kv key `workerUrl`.", undefined, [380, 220]);
+  w.note("## Sparks · Lead Finder\nRuns entirely in n8n: Google Maps results come from **SerpApi** (credential *Sparks SerpApi*, free plan 250 searches/month), then n8n fetches each business's own site to verify the phone, collect own-domain email and look for the owner/director. Widening ring by ring only when a run comes up short. Results land in sparks_lead_results; the portal polls sparks_lead_jobs.", [-420, -60], [420, 240]);
   const start = hook(w, "Start run", "POST", "sparks/leads/start");
   const validate = code(w, "Validate request", `
 const b = $json.body || {};
@@ -230,75 +280,172 @@ const queries = Array.isArray(b.queries) ? b.queries : [];
 const problems = [];
 if (b.acknowledgedCompliance !== true) problems.push('Tick the Do Not Call / Spam Act acknowledgement first.');
 if (!queries.length) problems.push('Pick at least one business type and suburb.');
-if (queries.length > 600) problems.push('That is more than 600 searches. Narrow it down.');
+if (queries.length > ${MAX_SEARCHES_PER_RUN}) problems.push('That is ' + queries.length + ' searches. The free SerpApi plan allows 250 a month, so keep one run to ${MAX_SEARCHES_PER_RUN} or fewer.');
 const target = Number(cfg.target);
-if (!(target >= 1 && target <= 1000)) problems.push('Lead count must be between 1 and 1000.');
+if (!(target >= 1 && target <= ${MAX_VERIFY})) problems.push('Lead count must be between 1 and ${MAX_VERIFY}.');
+cfg.maxPerQuery = Math.min(20, Math.max(5, Number(cfg.maxPerQuery) || 20));
+cfg.state = String(cfg.state || 'VIC').toUpperCase();
 const jobId = 'L' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 return [{ json: { ok: problems.length === 0, error: problems.join(' '), jobId, label: String(cfg.label || 'Lead run').slice(0, 120), config: cfg, queries } }];`);
   const ok = ifTrue(w, "Valid?", "={{ $json.ok }}");
   w.chain(start, validate, ok);
-  const bad = respond(w, "Reject", "={{ { error: $json.error } }}", 400);
-  w.link(ok, bad, 1);
-  const worker = kvGet(w, "Get worker URL", "workerUrl");
-  w.link(ok, worker, 0);
-  const call = w.add("Send to Maps worker", "n8n-nodes-base.httpRequest", 4.2, {
-    method: "POST",
-    url: `={{ (${kvValue("Get worker URL")}.url || 'http://worker-not-configured.invalid') + '/leads/jobs' }}`,
-    authentication: "genericCredentialType",
-    genericAuthType: "httpHeaderAuth",
-    sendBody: true,
-    specifyBody: "json",
-    jsonBody: `={{ JSON.stringify({ jobId: $('Validate request').item.json.jobId, label: $('Validate request').item.json.label, config: $('Validate request').item.json.config, queries: $('Validate request').item.json.queries, callbackUrl: '${HOOK_BASE}/sparks/worker/leads' }) }}`,
-    options: { timeout: 20000 },
-  }, { credentials: { httpHeaderAuth: C.worker }, onError: "continueErrorOutput" });
-  w.link(worker, call);
-  const workerDown = respond(w, "Worker unreachable", "={{ { error: 'The Maps worker is not reachable. Check it is running on RepoCloud and its URL is set (sparks_kv → workerUrl).' } }}", 424);
-  w.link(call, workerDown, 1);
-  const save = dt(w, "Record job", "sparks_lead_jobs", "insert", { body: "{jobId:$json.jobId,label:$json.label,status:'queued',summary_object:JSON.stringify($json)}" });
-  w.link(call, save, 0);
-  w.chain(save, activity(w, "Log start", "leads", "'Lead run started: ' + $('Validate request').item.json.label"), respond(w, "Started", "={{ { jobId: $('Validate request').item.json.jobId } }}"));
-
-  // worker callback
-  w.lane();
-  const cb = hook(w, "Worker callback", "POST", "sparks/worker/leads", "worker");
-  const ack = respond(w, "Ack worker", "={{ { ok: true } }}");
-  const up = dt(w, "Update job", "sparks_lead_jobs", "upsert", {
-    filter: eqFilter("jobId", "$('Worker callback').item.json.body.jobId"),
-    body: "{jobId:$('Worker callback').item.json.body.jobId,label:$('Worker callback').item.json.body.label,status:$('Worker callback').item.json.body.status,summary_object:JSON.stringify($('Worker callback').item.json.body)}",
+  w.link(ok, respond(w, "Reject", "={{ { error: $json.error } }}", 400), 1);
+  const rec = dt(w, "Record job", "sparks_lead_jobs", "insert", {
+    body: "{jobId:$json.jobId,label:$json.label,status:'scraping',summary_object:JSON.stringify({jobId:$json.jobId,label:$json.label,status:'scraping',target:$json.config.target,queriesTotal:$json.queries.length,queriesDone:0,scraped:0,unique:0,phoneVerified:0,withEmail:0,withDecisionMaker:0,withDirectMobile:0,widenedInto:[]})}",
   });
-  const done = ifTrue(w, "Finished?", "={{ $('Worker callback').item.json.body.final === true && $('Worker callback').item.json.body.status === 'done' }}");
-  w.chain(cb, ack, up, done);
-  const wurl = kvGet(w, "Get worker URL (cb)", "workerUrl");
-  const rows = w.add("Fetch rows from worker", "n8n-nodes-base.httpRequest", 4.2, {
-    method: "GET",
-    url: `={{ ${kvValue("Get worker URL (cb)")}.url + '/leads/jobs/' + $('Worker callback').item.json.body.jobId + '/rows' }}`,
-    authentication: "genericCredentialType",
-    genericAuthType: "httpHeaderAuth",
-    options: { timeout: 30000, response: { response: { responseFormat: "text", outputPropertyName: "rowsText" } } },
-  }, { credentials: { httpHeaderAuth: C.worker }, retryOnFail: true, maxTries: 3, waitBetweenTries: 3000 });
-  const store = dt(w, "Store results", "sparks_lead_results", "upsert", {
-    filter: eqFilter("jobId", "$('Worker callback').item.json.body.jobId"),
-    body: "{jobId:$('Worker callback').item.json.body.jobId,rows_object:$json.rowsText}",
+  w.link(ok, rec, 0);
+  const started = respond(w, "Started", "={{ { jobId: $('Validate request').item.json.jobId } }}");
+  const list = code(w, "Search list", "return $('Validate request').first().json.queries.map(q => ({ json: q }));");
+  const search = serpMaps(w, "Search Maps", "={{ $json.query }}");
+  const collect = code(w, "Collect results", `${LIB}
+const v = $('Validate request').first().json;
+const cfg = v.config, qs = v.queries;
+const toRow = ${leadRow};
+let scraped = 0, dropped = 0, errors = 0, firstError = '';
+const seen = new Set(), rows = [];
+$input.all().forEach((it, i) => {
+  if (it.json.error) { errors++; firstError = firstError || String(it.json.error.message || it.json.error).slice(0, 160); }
+  const q = qs[i] || {};
+  const lr = (it.json.local_results || []).slice(0, cfg.maxPerQuery);
+  scraped += lr.length;
+  for (const r of lr) {
+    if (!r.title) continue;
+    if (!inState(r.address, cfg.state)) { dropped++; continue; }
+    const key = r.title.toLowerCase() + '|' + digits(r.phone);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    rows.push(toRow(r, q));
+  }
+});
+let widen = [], widenedInto = [], reason = '';
+if (cfg.widen && rows.length < cfg.target && errors < qs.length) {
+  let short = cfg.target - rows.length;
+  for (const ring of cfg.rings || []) {
+    if (short <= 0) break;
+    const ringQs = [];
+    for (const c of cfg.categories || []) for (const s of ring) for (const vv of c.variants || []) if (String(vv).trim()) ringQs.push({ query: vv + ' in ' + s + ' ' + cfg.state, category: c.label, suburb: s });
+    widen.push(...ringQs);
+    widenedInto.push(...ring);
+    short -= ringQs.length * 12; // rough: ~12 new unique businesses per extra search
+  }
+  reason = 'only ' + rows.length + ' unique leads from the chosen suburbs; target is ' + cfg.target;
+  widen = widen.slice(0, Math.max(0, ${MAX_SEARCHES_PER_RUN} - qs.length)); // stay inside the per-run search budget
+}
+return [{ json: { rows, scraped, dropped, errors, firstError, widen, widenedInto, reason } }];`);
+  const needMore = ifTrue(w, "Widen?", "={{ $json.widen.length > 0 }}");
+  w.chain(rec, started, list, search, collect, needMore);
+  const ringList = code(w, "Wider search list", "return $('Collect results').first().json.widen.map(q => ({ json: q }));");
+  const ringSearch = serpMaps(w, "Search Maps (wider)", "={{ $json.query }}");
+  const build = code(w, "Build candidates", `${LIB}
+const c = $('Collect results').first().json;
+const cfg = $('Validate request').first().json.config;
+const toRow = ${leadRow};
+const rows = [...c.rows];
+let scraped = c.scraped, dropped = c.dropped, errors = c.errors, extraSearches = 0;
+if ($('Search Maps (wider)').isExecuted) {
+  const seen = new Set(rows.map(r => r.name.toLowerCase() + '|' + digits(r.phone)));
+  $('Search Maps (wider)').all().forEach((it, i) => {
+    extraSearches++;
+    if (it.json.error) errors++;
+    const q = c.widen[i] || {};
+    const lr = (it.json.local_results || []).slice(0, cfg.maxPerQuery);
+    scraped += lr.length;
+    for (const r of lr) {
+      if (!r.title) continue;
+      if (!inState(r.address, cfg.state)) { dropped++; continue; }
+      const key = r.title.toLowerCase() + '|' + digits(r.phone);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      rows.push(toRow(r, q));
+    }
   });
-  w.link(done, wurl, 0);
-  w.chain(wurl, rows, store, activity(w, "Log finished", "leads", "'Lead run finished: ' + $('Worker callback').item.json.body.message"));
-
-  // resume
-  w.lane();
-  const rs = hook(w, "Resume run", "POST", "sparks/leads/resume");
-  const rsUrl = kvGet(w, "Get worker URL (resume)", "workerUrl");
-  const rsCall = w.add("Ask worker to resume", "n8n-nodes-base.httpRequest", 4.2, {
-    method: "POST",
-    url: `={{ ${kvValue("Get worker URL (resume)")}.url + '/leads/jobs/' + encodeURIComponent($('Resume run').item.json.body.jobId || '') + '/resume' }}`,
-    authentication: "genericCredentialType",
-    genericAuthType: "httpHeaderAuth",
-    options: { timeout: 20000 },
-  }, { credentials: { httpHeaderAuth: C.worker }, onError: "continueErrorOutput" });
-  w.chain(rs, rsUrl, rsCall, activity(w, "Log resume", "leads", "'Lead run resumed'"), respond(w, "Resumed", "={{ { ok: true } }}"));
-  w.link(rsCall, respond(w, "Resume failed", "={{ { error: 'Could not resume: ' + ($json.error?.message || 'worker unreachable') } }}", 424), 1);
+}
+const meta = { scraped, dropped, errors, unique: rows.length, extraSearches };
+// verify the strongest candidates first (review count), capped to keep the run light
+rows.sort((a, b) => (Number(b.reviews) || 0) - (Number(a.reviews) || 0));
+const pick = rows.slice(0, Math.min(${MAX_VERIFY}, Math.max(cfg.target, Math.ceil(cfg.target * 1.5))));
+if (!pick.length) return [{ json: { empty: true, meta } }];
+return pick.map(r => {
+  const m = String(r.website).match(/^[a-z]+:\\/\\/[^/?#]+/i);
+  return { json: { ...r, contactUrl: m ? m[0] + '/contact' : '', meta } };
+});`);
+  w.link(needMore, ringList, 0);
+  w.chain(ringList, ringSearch, build);
+  w.link(needMore, build, 1);
+  const verifying = dt(w, "Mark verifying", "sparks_lead_jobs", "update", {
+    filter: eqFilter("jobId", "$('Validate request').first().json.jobId"),
+    body: "{status:'verifying',summary_object:JSON.stringify({jobId:$('Validate request').first().json.jobId,label:$('Validate request').first().json.label,status:'verifying',target:$('Validate request').first().json.config.target,queriesTotal:$('Validate request').first().json.queries.length+$json.meta.extraSearches,queriesDone:$('Validate request').first().json.queries.length+$json.meta.extraSearches,scraped:$json.meta.scraped,unique:$json.meta.unique,phoneVerified:0,withEmail:0,withDecisionMaker:0,withDirectMobile:0,widenedInto:$('Collect results').first().json.widenedInto,widenReason:$('Collect results').first().json.reason})}",
+    extra: { executeOnce: true, onError: "continueRegularOutput" },
+  });
+  w.link(build, verifying);
+  const home = fetchPage(w, "Fetch homepage", "={{ $json.website || 'http://no-website.invalid' }}");
+  const contact = fetchPage(w, "Fetch contact page", "={{ $('Build candidates').item.json.contactUrl || 'http://no-website.invalid' }}");
+  const verify = code(w, "Verify and rank", `${LIB}
+const v = $('Validate request').first().json;
+const cfg = v.config;
+const c = $('Collect results').first().json;
+const cands = $('Build candidates').all().map(i => i.json);
+const meta = cands[0].meta;
+const leads = cands.filter(l => !l.empty);
+const homes = $('Fetch homepage').all();
+const contacts = $input.all();
+const out = leads.map((l, i) => {
+  const home = String((homes[i] && homes[i].json.data) || '');
+  const contact = String((contacts[i] && contacts[i].json.data) || '');
+  const raw = home + ' ' + contact;
+  const text = toText(home) + ' | ' + toText(contact);
+  let pv = '';
+  if (!l.website) pv = l.phone ? 'no website found — phone from Google Maps only' : '';
+  else if (!home) pv = 'No (website unreachable)';
+  else { const ph = digits(l.phone).slice(-8); pv = ph && (digits(text) + digits(raw)).includes(ph) ? 'Yes' : 'No'; }
+  const emails = l.website ? goodEmails(raw, l.website) : [];
+  const dm = l.website && home ? extractDecisionMaker(text, l.name) : { name: '', role: '', mobile: '' };
+  return { ...l, pv, email: emails[0] || '', dm };
+});
+const byName = {};
+out.forEach(r => { if (r.dm.name) { const k = r.dm.name.toLowerCase(); (byName[k] = byName[k] || new Set()).add(r.name); } });
+out.sort((a, b) => ((a.pv !== 'Yes') - (b.pv !== 'Yes')) || ((!a.email) - (!b.email)) || ((Number(b.reviews) || 0) - (Number(a.reviews) || 0)));
+const rows = out.slice(0, cfg.target).map(r => {
+  const [size, basis] = sizeEstimate(r.name, r.reviews, cfg.franchiseBrands, cfg.nationalBrands);
+  const shared = r.dm.name && byName[r.dm.name.toLowerCase()].size > 1;
+  return {
+    business_name: r.name, category: r.category || r.leadCategory, suburb_area: r.suburb, address: r.address,
+    business_phone: r.phone, phone_verified_on_own_site: r.pv, business_email: r.email, website: r.website,
+    google_rating: String(r.rating), google_reviews: String(r.reviews),
+    decision_maker_name: r.dm.name, decision_maker_role: r.dm.role, decision_maker_direct_mobile: r.dm.mobile,
+    decision_maker_shared_with_other_listing: shared ? 'shared with another listing — confirm which office before calling' : '',
+    decision_maker_source: r.dm.name ? "auto-extracted from the business's own website — spot-check before relying on it" : '',
+    business_size_estimate: size, size_basis: basis, maps_search_query: r.query,
+  };
+});
+const searches = v.queries.length + meta.extraSearches;
+let message = rows.length + ' leads delivered from ' + meta.unique + ' unique listings (' + searches + ' SerpApi searches used)';
+if (meta.dropped) message += '; ' + meta.dropped + ' results outside ' + cfg.state + ' dropped';
+if (meta.errors) message += '; ' + meta.errors + ' searches failed' + (c.firstError ? ' (' + c.firstError + ')' : '');
+if (meta.unique < cfg.target) message += '. Only ' + meta.unique + ' found, short of the ' + cfg.target + ' target' + (c.widenedInto.length ? ' even after widening.' : '; turn on widening or add suburbs/phrasings.');
+const summary = {
+  jobId: v.jobId, label: v.label, status: rows.length || !meta.errors ? 'done' : 'failed', target: cfg.target,
+  queriesTotal: searches, queriesDone: searches, scraped: meta.scraped, unique: meta.unique,
+  phoneVerified: rows.filter(r => r.phone_verified_on_own_site === 'Yes').length,
+  withEmail: rows.filter(r => r.business_email).length,
+  withDecisionMaker: rows.filter(r => r.decision_maker_name).length,
+  withDirectMobile: rows.filter(r => r.decision_maker_direct_mobile).length,
+  widenedInto: c.widenedInto, widenReason: c.reason, message,
+};
+return [{ json: { rows, summary } }];`);
+  w.link(build, home);
+  w.chain(
+    home, contact, verify,
+    dt(w, "Store results", "sparks_lead_results", "upsert", { filter: eqFilter("jobId", "$json.summary.jobId"), body: "{jobId:$json.summary.jobId,rows_object:JSON.stringify($json.rows)}" }),
+    dt(w, "Mark done", "sparks_lead_jobs", "upsert", {
+      filter: eqFilter("jobId", "$('Verify and rank').first().json.summary.jobId"),
+      body: "{jobId:$('Verify and rank').first().json.summary.jobId,label:$('Verify and rank').first().json.summary.label,status:$('Verify and rank').first().json.summary.status,summary_object:JSON.stringify($('Verify and rank').first().json.summary)}",
+    }),
+    activity(w, "Log finished", "leads", "'Lead run finished: ' + $('Verify and rank').first().json.summary.message"),
+  );
 
   // reads
-  w.lane();
+  w.lane(); w.lane();
   w.chain(
     hook(w, "List runs", "GET", "sparks/leads/jobs"),
     dt(w, "Read runs", "sparks_lead_jobs", "list", { limit: 30 }),
@@ -313,58 +460,59 @@ return [{ json: { ok: problems.length === 0, error: problems.join(' '), jobId, l
   return w;
 }
 
-// ================================================================== 3. Maps Rank Grid
+// ================================================================== 3. Maps Rank Grid (SerpApi, all in n8n)
 function rankGrid() {
   const w = workflow("Sparks · Maps Rank Grid");
   w.lane();
-  w.note("## Sparks · Maps Rank Grid\nSearches Google Maps from a grid of points (via the Maps worker) and records where the business ranks at each point.");
+  w.note("## Sparks · Maps Rank Grid\nSearches Google Maps (via **SerpApi**, one search per grid point) as if the customer were standing at each point, and records the business's rank and the top 3 there. 3×3 = 9 searches, 5×5 = 25.", [-420, -60], [420, 200]);
   const start = hook(w, "Start scan", "POST", "sparks/grid/start");
   const v = code(w, "Validate scan", `
 const b = $json.body || {};
 const size = Number(b.gridSize), km = Number(b.spacingKm), lat = Number(b.centerLat), lng = Number(b.centerLng);
 const problems = [];
 if (!String(b.keyword || '').trim()) problems.push('Enter a search phrase.');
-if (![3, 5, 7, 9].includes(size)) problems.push('Grid must be 3, 5, 7 or 9.');
+if (![3, 5, 7].includes(size)) problems.push('Grid must be 3, 5 or 7.');
 if (!(km > 0 && km <= 10)) problems.push('Spacing must be 0–10 km.');
 if (!(lat < -9 && lat > -45 && lng > 110 && lng < 155)) problems.push('Centre must be in Australia.');
 if (!String(b.businessName || '').trim()) problems.push('Business name is required.');
-const job = { jobId: 'G' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), keyword: String(b.keyword).trim().slice(0, 120), businessName: String(b.businessName).trim(), gridSize: size, spacingKm: km, centerLat: lat, centerLng: lng, depth: Math.min(40, Number(b.depth) || 20) };
+const job = { jobId: 'G' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), keyword: String(b.keyword).trim().slice(0, 120), businessName: String(b.businessName).trim(), gridSize: size, spacingKm: km, centerLat: lat, centerLng: lng, depth: 20 };
 return [{ json: { ok: !problems.length, error: problems.join(' '), job } }];`);
   const ok = ifTrue(w, "Valid?", "={{ $json.ok }}");
   w.chain(start, v, ok);
   w.link(ok, respond(w, "Reject", "={{ { error: $json.error } }}", 400), 1);
-  const wu = kvGet(w, "Get worker URL", "workerUrl");
-  w.link(ok, wu, 0);
-  const call = w.add("Send to Maps worker", "n8n-nodes-base.httpRequest", 4.2, {
-    method: "POST",
-    url: `={{ (${kvValue("Get worker URL")}.url || 'http://worker-not-configured.invalid') + '/grid/jobs' }}`,
-    authentication: "genericCredentialType",
-    genericAuthType: "httpHeaderAuth",
-    sendBody: true,
-    specifyBody: "json",
-    jsonBody: `={{ JSON.stringify({ ...$('Validate scan').item.json.job, callbackUrl: '${HOOK_BASE}/sparks/worker/grid' }) }}`,
-    options: { timeout: 20000 },
-  }, { credentials: { httpHeaderAuth: C.worker }, onError: "continueErrorOutput" });
-  w.link(wu, call);
-  w.link(call, respond(w, "Worker unreachable", "={{ { error: 'The Maps worker is not reachable. Check it is running on RepoCloud and its URL is set (sparks_kv → workerUrl).' } }}", 424), 1);
   const rec = dt(w, "Record scan", "sparks_grid_jobs", "insert", {
-    body: "{jobId:$('Validate scan').item.json.job.jobId,keyword:$('Validate scan').item.json.job.keyword,status:'queued',job_object:JSON.stringify({...$('Validate scan').item.json.job,status:'queued',points:[],createdAt:$now.toISO()})}",
+    body: "{jobId:$json.job.jobId,keyword:$json.job.keyword,status:'running',job_object:JSON.stringify({...$json.job,status:'running',points:[],createdAt:$now.toISO()})}",
   });
-  w.link(call, rec, 0);
-  w.chain(rec, activity(w, "Log scan", "maps", "'Maps rank scan started: \"' + $('Validate scan').item.json.job.keyword + '\"'"), respond(w, "Started", "={{ { jobId: $('Validate scan').item.json.job.jobId } }}"));
-
-  w.lane();
-  const cb = hook(w, "Worker callback", "POST", "sparks/worker/grid", "worker");
+  w.link(ok, rec, 0);
+  const pts = code(w, "Grid points", `
+const j = $('Validate scan').first().json.job;
+const half = (j.gridSize - 1) / 2, dlat = j.spacingKm / 111.32, dlng = j.spacingKm / (111.32 * Math.cos(j.centerLat * Math.PI / 180));
+const out = [];
+for (let r = 0; r < j.gridSize; r++) for (let c = 0; c < j.gridSize; c++)
+  out.push({ json: { lat: +(j.centerLat + (half - r) * dlat).toFixed(6), lng: +(j.centerLng + (c - half) * dlng).toFixed(6) } });
+return out;`);
+  const search = serpMaps(w, "Search Maps at point", "={{ $('Validate scan').first().json.job.keyword }}", "={{ '@' + $json.lat + ',' + $json.lng + ',14z' }}");
+  const rank = code(w, "Rank each point", `${LIB}
+const j = $('Validate scan').first().json.job;
+const pts = $('Grid points').all().map(p => p.json);
+let failed = 0, firstError = '';
+const points = $input.all().map((it, i) => {
+  const p = pts[i];
+  if (it.json.error) { failed++; firstError = firstError || String(it.json.error.message || it.json.error).slice(0, 160); return { lat: p.lat, lng: p.lng, rank: null, top: [], error: 'search failed' }; }
+  const names = (it.json.local_results || []).map(r => r.title).filter(Boolean).slice(0, j.depth);
+  if (!names.length && it.json.place_results && it.json.place_results.title) names.push(it.json.place_results.title);
+  const idx = names.findIndex(n => namesMatch(n, j.businessName));
+  return { lat: p.lat, lng: p.lng, rank: idx >= 0 ? idx + 1 : null, top: names.slice(0, 3) };
+});
+const status = failed === points.length ? 'failed' : 'done';
+return [{ json: { ...j, status, points, createdAt: $('Record scan').first().json.createdAt || new Date().toISOString(), message: failed ? failed + ' of ' + points.length + ' searches failed' + (firstError ? ' (' + firstError + ')' : '') : '' } }];`);
   w.chain(
-    cb,
-    respond(w, "Ack worker", "={{ { ok: true } }}"),
-    dt(w, "Update scan", "sparks_grid_jobs", "upsert", {
-      filter: eqFilter("jobId", "$('Worker callback').item.json.body.jobId"),
-      body: "{jobId:$('Worker callback').item.json.body.jobId,keyword:$('Worker callback').item.json.body.keyword,status:$('Worker callback').item.json.body.status,job_object:JSON.stringify($('Worker callback').item.json.body)}",
-    }),
+    rec, respond(w, "Started", "={{ { jobId: $('Validate scan').item.json.job.jobId } }}"), pts, search, rank,
+    dt(w, "Save scan", "sparks_grid_jobs", "upsert", { filter: eqFilter("jobId", "$json.jobId"), body: "{jobId:$json.jobId,keyword:$json.keyword,status:$json.status,job_object:JSON.stringify($json)}" }),
+    activity(w, "Log scan", "maps", "'Maps rank scan ' + $('Rank each point').first().json.status + ': \"' + $('Rank each point').first().json.keyword + '\"'"),
   );
 
-  w.lane();
+  w.lane(); w.lane();
   w.chain(
     hook(w, "List scans", "GET", "sparks/grid/jobs"),
     dt(w, "Read scans", "sparks_grid_jobs", "list", { limit: 20 }),
@@ -738,7 +886,9 @@ async function main() {
     worker: await headerCred("Sparks · worker secret", "x-worker-secret", WORKER_SECRET),
     n8nApi: await headerCred("Sparks · n8n API", "X-N8N-API-KEY", KEY || "dry"),
     openAi: await findCred("openAiApi"),
+    serp: await findCredByName("Sparks SerpApi"),
   };
+  if (!C.serp) throw new Error('Create the n8n credential "Sparks SerpApi" (type SerpApi) first');
   if (!C.openAi) console.warn("! no OpenAI credential found — assign one to the 'Write drafts' / 'Write reply' nodes");
   T = await ensureTables();
 

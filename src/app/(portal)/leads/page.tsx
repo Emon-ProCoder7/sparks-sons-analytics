@@ -37,6 +37,7 @@ function JobProgress({ j }: { j: LeadJob }) {
 
 export default function Leads() {
   const jobs = useN8n<LeadJob[]>("leads.jobs", undefined, 10_000);
+  const quota = useN8n<{ left?: number; perMonth?: number; plan?: string }>("quota.get");
   const [selected, setSelected] = useState<string | null>(null);
   const rows = useN8n<LeadRow[]>("leads.rows", selected ? { jobId: selected } : { jobId: "" });
 
@@ -142,8 +143,8 @@ export default function Leads() {
             </form>
 
             <div className="mt-5 grid gap-3 sm:grid-cols-4">
-              <div><label className="label" htmlFor="tg">How many leads</label><input id="tg" type="number" min={10} max={1000} className="field" value={target} onChange={(e) => setTarget(Number(e.target.value))} /></div>
-              <div><label className="label" htmlFor="mq">Results per search</label><input id="mq" type="number" min={5} max={25} className="field" value={maxPerQuery} onChange={(e) => setMaxPerQuery(Math.min(25, Number(e.target.value)))} /></div>
+              <div><label className="label" htmlFor="tg">How many leads</label><input id="tg" type="number" min={10} max={300} className="field" value={target} onChange={(e) => setTarget(Number(e.target.value))} /></div>
+              <div><label className="label" htmlFor="mq">Results per search</label><input id="mq" type="number" min={5} max={20} className="field" value={maxPerQuery} onChange={(e) => setMaxPerQuery(Math.min(20, Number(e.target.value)))} /></div>
               <div><label className="label" htmlFor="stt">State only</label><input id="stt" className="field" value={state} onChange={(e) => setState(e.target.value.toUpperCase())} /></div>
               <div><label className="label" htmlFor="lb">Run name</label><input id="lb" className="field" placeholder="optional" value={label} onChange={(e) => setLabel(e.target.value)} /></div>
             </div>
@@ -171,7 +172,13 @@ export default function Leads() {
             </Card>
 
             <Card title="3 · Review & start">
-              <p className="text-sm"><b>{queries.length}</b> Google Maps searches · up to <b>{queries.length * maxPerQuery}</b> listings checked · about <b>{mins} min</b></p>
+              <p className="text-sm"><b>{queries.length}</b> Google Maps searches · up to <b>{queries.length * maxPerQuery}</b> listings · about <b>{mins} min</b></p>
+              {typeof quota.data?.left === "number" && (
+                <p className={`mt-1 text-xs ${queries.length > quota.data.left ? "text-bad" : "text-muted"}`}>
+                  Uses {queries.length} of the {quota.data.left} searches left this month ({quota.data.plan ?? "SerpApi"}: {quota.data.perMonth}/month). Widening can use a few more.
+                </p>
+              )}
+              {queries.length > 60 && <p className="mt-1 text-xs text-bad">Keep one run to 60 searches or fewer.</p>}
               <details className="mt-2 text-xs">
                 <summary className="cursor-pointer text-muted">See every search</summary>
                 <ul data-lenis-prevent className="mt-1 max-h-40 overflow-y-auto">{queries.map((q) => <li key={q.query}>{q.query}</li>)}</ul>
@@ -180,14 +187,14 @@ export default function Leads() {
                 <input type="checkbox" className="mt-1" checked={ack} onChange={(e) => setAck(e.target.checked)} />
                 <span>I&apos;ll check numbers against the Do Not Call Register before calling, follow ACMA calling hours, and only email in line with the Spam Act 2003.</span>
               </label>
-              <button className="btn btn-primary mt-3 w-full" onClick={start} disabled={busy || !ack || !queries.length || !jobs.connected}>{busy ? "Starting…" : "Find leads"}</button>
+              <button className="btn btn-primary mt-3 w-full" onClick={start} disabled={busy || !ack || !queries.length || queries.length > 60 || !jobs.connected || (typeof quota.data?.left === "number" && queries.length > quota.data.left)}>{busy ? "Starting…" : "Find leads"}</button>
               {msg && <div className="mt-3"><Notice tone={msg.tone}>{msg.text}</Notice></div>}
             </Card>
           </div>
         </div>
 
         {!jobs.connected ? (
-          <NotConnected what="Lead finder" how="Runs on the n8n automation server plus the Maps worker. Connect them in Settings to start runs." />
+          <NotConnected what="Lead finder" how="Runs on the n8n automation server (Google Maps data via SerpApi). Connect n8n in Settings to start runs." />
         ) : (
           <Card title="Runs">
             {!jobs.data?.length ? <p className="text-sm text-muted">No runs yet.</p> : (
@@ -197,18 +204,6 @@ export default function Leads() {
                     <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                       <button className="text-left font-medium hover:underline" onClick={() => setSelected(j.jobId)}>{j.label}</button>
                       <span className="flex items-center gap-2 text-xs text-muted">
-                        {(j.status === "interrupted" || j.status === "failed") && (
-                          <button
-                            className="btn btn-ghost px-2 py-1 text-xs"
-                            onClick={async () => {
-                              const r = await n8n("leads.resume", { body: { jobId: j.jobId } });
-                              setMsg(r.ok ? { tone: "ok", text: "Resuming from the last completed search." } : { tone: "error", text: r.error });
-                              jobs.reload();
-                            }}
-                          >
-                            Resume
-                          </button>
-                        )}
                         {new Date(j.createdAt).toLocaleString("en-AU")}
                         <Pill state={j.status === "done" ? "live" : j.status === "failed" ? "error" : "loading"}>{j.status}</Pill>
                       </span>

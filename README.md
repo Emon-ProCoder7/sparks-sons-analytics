@@ -7,12 +7,12 @@ appears on Google, and why, in plain English. It also puts the day-to-day market
 |---|---|---|
 | Overview | Headline numbers with honest status labels (LIVE / SNAPSHOT / DEMO / NOT CONNECTED) | n8n |
 | Why we're not in Maps | Evidence-based answer to "we're on page 1 but not in the map" | static + real scan |
-| Maps Rank Grid | Searches Google Maps from a grid of points and records the business's rank at each | n8n → Maps worker |
+| Maps Rank Grid | Searches Google Maps from a grid of points and records the business's rank at each | n8n → SerpApi |
 | Keywords | Real Google Search Console queries, unlimited tracked phrases | n8n → Search Console API |
 | Website Health | Crawls the sitemap, turns issues into plain-English fixes | n8n |
 | Reviews | Counter QR code, SMS/email review requests (consent + approval gated), AI reply drafts | n8n → Twilio / Resend / OpenAI |
 | Posts & Photos | AI drafts from the owner's own facts; nothing publishes without an approval tick | n8n → OpenAI → Facebook / Google Business Profile |
-| Lead Finder | Owner-configurable Google Maps lead scraping, verification and decision-maker extraction; one ranked CSV | n8n → Maps worker |
+| Lead Finder | Owner-configurable Google Maps lead finding, website verification and decision-maker extraction; one ranked CSV | n8n → SerpApi + website checks in n8n |
 
 ## Architecture
 
@@ -23,13 +23,14 @@ Browser ─▶ Next.js on Vercel ─▶ /api/n8n/<action>  (passcode session; al
                          n8n on RepoCloud  (7 workflows, Data Tables storage, all secrets in n8n credentials)
                           │            │                │
                           ▼            ▼                ▼
-                  Maps worker     OpenAI / Google   Twilio / Resend / Facebook
-              (Playwright, Docker)  APIs
+                    SerpApi       OpenAI / Google   Twilio / Resend / Facebook
+              (Google Maps data)    APIs
 ```
 
 - `src/` — the portal (Next.js 16, Tailwind 4). Design rules in [DESIGN.md](DESIGN.md), taken from sparks.com.au.
 - `n8n/build.mjs` — creates/updates every n8n credential, Data Table and workflow through the n8n API. See [n8n/README.md](n8n/README.md).
-- `worker/` — the Google Maps worker (FastAPI + Playwright). See [worker/README.md](worker/README.md).
+- `n8n/code/lib-leads.js` holds the lead-checking logic used inside n8n (tests: `node n8n/code/lib-leads.test.mjs`).
+- `worker/` is an optional self-hosted browser scraper (FastAPI + Playwright), no longer required. See [worker/README.md](worker/README.md).
 
 ## Guardrails
 
