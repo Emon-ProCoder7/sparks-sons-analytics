@@ -47,7 +47,21 @@ export function n8nConfigured(): boolean {
   return Boolean(process.env.N8N_WEBHOOK_BASE && process.env.N8N_SHARED_SECRET);
 }
 
+/** An HTML page instead of JSON means the request never reached n8n (Cloudflare / host error page). */
+const isHtml = (s: string) => /^\s*(<!doctype html|<html)/i.test(s);
+
 export async function callN8n(action: Action, opts: { query?: URLSearchParams; body?: unknown } = {}) {
+  // Reads are safe to repeat, so retry once if the server hiccups. Writes (starting a check, sending)
+  // are never retried automatically, so nothing runs or spends searches twice.
+  const first = await callOnce(action, opts);
+  if (ROUTES[action].method === "GET" && first.unreachable) {
+    await new Promise((r) => setTimeout(r, 1500));
+    return callOnce(action, opts);
+  }
+  return first;
+}
+
+async function callOnce(action: Action, opts: { query?: URLSearchParams; body?: unknown }) {
   const route = ROUTES[action];
   const base = process.env.N8N_WEBHOOK_BASE!.replace(/\/+$/, "");
   const url = `${base}/${route.path}${opts.query && [...opts.query].length ? `?${opts.query}` : ""}`;
@@ -62,11 +76,18 @@ export async function callN8n(action: Action, opts: { query?: URLSearchParams; b
     signal: AbortSignal.timeout(action === "content.draft" || action === "reviews.replyDraft" ? 90_000 : 30_000),
   });
   const text = await res.text();
+  if (isHtml(text) || (res.status >= 520 && res.status <= 530)) {
+    return {
+      status: 503,
+      unreachable: true,
+      data: { error: `The automation server didn't answer (HTTP ${res.status}). It may be restarting. Please try again in a minute.` },
+    };
+  }
   let data: unknown;
   try {
     data = text ? JSON.parse(text) : {};
   } catch {
     data = { error: text.slice(0, 300) || `n8n returned HTTP ${res.status}` };
   }
-  return { status: res.status, data };
+  return { status: res.status, unreachable: false, data };
 }
