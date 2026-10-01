@@ -11,6 +11,12 @@ export const ROUTES = {
   "activity.list": { method: "GET", path: "sparks/activity", write: false },
   "quota.get": { method: "GET", path: "sparks/serpapi/quota", write: false },
 
+  "visibility.latest": { method: "GET", path: "sparks/visibility/latest", write: false },
+  "visibility.run": { method: "POST", path: "sparks/visibility/run", write: true },
+  "keywords.get": { method: "GET", path: "sparks/keywords", write: false },
+  "keywords.discover": { method: "POST", path: "sparks/keywords/discover", write: true },
+  "keywords.update": { method: "POST", path: "sparks/keywords/update", write: true },
+
   "leads.start": { method: "POST", path: "sparks/leads/start", write: true },
   "leads.jobs": { method: "GET", path: "sparks/leads/jobs", write: false },
   "leads.rows": { method: "GET", path: "sparks/leads/rows", write: false },

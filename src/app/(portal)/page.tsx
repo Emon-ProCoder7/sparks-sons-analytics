@@ -118,7 +118,7 @@ export default function Overview() {
               ))}
             </ol>
             <div className="mt-4 flex flex-wrap gap-2">
-              <Link className="btn btn-primary" href="/insights">Why we&apos;re not in Maps</Link>
+              <Link className="btn btn-primary" href="/google">Google visibility</Link>
               <Link className="btn btn-ghost" href="/site-health">All website issues</Link>
             </div>
           </Card>

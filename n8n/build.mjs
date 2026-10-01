@@ -90,6 +90,7 @@ const TABLES = {
   sparks_gsc: [["rangeDays", "string"], ["result_object", "string"]],
   sparks_audits: [["runId", "string"], ["site", "string"], ["pages_object", "string"]],
   sparks_posts: [["postId", "string"], ["status", "string"], ["post_object", "string"]],
+  sparks_visibility: [["runId", "string"], ["result_object", "string"]],
   sparks_reviews: [["customerName", "string"], ["channel", "string"], ["status", "string"], ["contactMasked", "string"], ["detail", "string"]],
 };
 async function ensureTables() {
@@ -865,6 +866,141 @@ return [{ json: { messages: [{ role: 'system', content: system }, { role: 'user'
   return w;
 }
 
+// ================================================================== 8. Google Visibility (keywords + map/link positions)
+const SEEDS_JS = readFileSync(join(ROOT, "n8n", "code", "kw-seeds.js"), "utf8");
+const BUSINESS_LL = "@-38.10492,144.34584,14z"; // 80 Cowie St, North Geelong (used to find Sparks' own listing)
+const GEELONG_LL = "@-38.1499,144.3617,13z"; // central Geelong: where the scoreboard searches from (searching from Sparks' door would flatter them)
+
+const parsedKv = (node) => `(() => { const r = $('${node}').first().json.data?.[0]; try { return r ? JSON.parse(r.value_object) : {}; } catch (e) { return {}; } })()`;
+
+function googleVisibility() {
+  const w = workflow("Sparks · Google Visibility");
+
+  // --- keyword discovery: free (Google Autocomplete), monthly + on demand
+  w.lane();
+  w.note("## Sparks · Google Visibility\n**Keywords** are chosen from real demand: Google Autocomplete for every Sparks service + 'geelong' (free, no key), plus Sparks' own Search Console once connected. Best keyword per service family, pins respected, refreshed monthly.\n**Visibility check**: for each tracked keyword, the Google Maps position searched from central Geelong (SerpApi), the map top 3 and their Google categories, and Sparks' own listing. Website-link position comes from Sparks' Search Console when connected (SerpApi's simulated web results proved unreliable). 1 search per keyword + 1. Weekly + on demand.", [-460, -80], [440, 280]);
+  const disc = hook(w, "Find keywords", "POST", "sparks/keywords/discover");
+  const monthly = w.add("Monthly (1st, 6am)", "n8n-nodes-base.scheduleTrigger", 1.2, { rule: { interval: [{ field: "months", triggerAtDayOfMonth: 1, triggerAtHour: 6 }] } });
+  const rk = kvGet(w, "Read keywords", "keywords");
+  w.link(disc, rk);
+  w.link(monthly, rk);
+  const seedList = code(w, "Seed list", `${SEEDS_JS}\nreturn SEEDS.map(([q, family]) => ({ json: { q: q + ' geelong', family } }));`);
+  const ac = w.add("Google Autocomplete", "n8n-nodes-base.httpRequest", 4.2, {
+    method: "GET",
+    url: "https://suggestqueries.google.com/complete/search",
+    sendQuery: true,
+    queryParameters: { parameters: [{ name: "client", value: "firefox" }, { name: "gl", value: "au" }, { name: "hl", value: "en-AU" }, { name: "q", value: "={{ $json.q }}" }] },
+    sendHeaders: true,
+    headerParameters: { parameters: [{ name: "User-Agent", value: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/128.0 Safari/537.36" }] },
+    options: { timeout: 15000, batching: { batch: { batchSize: 1, batchInterval: 300 } }, response: { response: { responseFormat: "text", neverError: true } } },
+  }, { onError: "continueRegularOutput" });
+  const score = code(w, "Score keywords", `${SEEDS_JS}\n${readFileSync(join(ROOT, "n8n", "code", "kw-score.js"), "utf8")}`);
+  const fromPortal = ifTrue(w, "Asked from portal?", "={{ $('Find keywords').isExecuted }}");
+  w.chain(
+    rk, kvGet(w, "Read settings", "settings"),
+    dt(w, "Read search console", "sparks_gsc", "list", { filter: eqFilter("rangeDays", "'90'"), limit: 1 }),
+    seedList, ac, score,
+    dt(w, "Save keywords", "sparks_kv", "upsert", { filter: eqFilter("key", "'keywords'"), body: "{key:'keywords',value_object:JSON.stringify($json)}" }),
+    activity(w, "Log keywords", "keywords", "'Keywords refreshed: tracking ' + $('Score keywords').first().json.tracked.map(t => t.keyword).join(', ')"),
+    fromPortal,
+  );
+  w.link(fromPortal, respond(w, "Return keywords", "={{ $('Score keywords').first().json }}"), 0);
+
+  // --- read keywords
+  w.lane(); w.lane();
+  w.chain(hook(w, "Get keywords", "GET", "sparks/keywords"), kvGet(w, "Read keywords (get)", "keywords"), respond(w, "Return saved keywords", `={{ ${parsedKv("Read keywords (get)")} }}`));
+
+  // --- pin / unpin / ignore a keyword
+  w.lane();
+  const upd = hook(w, "Change keyword", "POST", "sparks/keywords/update");
+  const apply = code(w, "Apply change", `
+const b = $('Change keyword').first().json.body || {};
+const kw = String(b.keyword || '').toLowerCase().trim();
+const action = String(b.action || '');
+const k = ${parsedKv("Read keywords (update)")};
+if (!kw || !['pin', 'unpin', 'ignore', 'unignore'].includes(action)) return [{ json: { ok: false, error: 'Send a keyword and an action (pin, unpin, ignore, unignore).' } }];
+k.pinned = (k.pinned || []).filter(x => x !== kw);
+k.ignored = (k.ignored || []).filter(x => x !== kw);
+k.tracked = k.tracked || []; k.candidates = k.candidates || [];
+const find = (arr) => arr.find(x => x.keyword === kw);
+if (action === 'pin') {
+  k.pinned.push(kw);
+  const c = find(k.tracked) || find(k.candidates) || { keyword: kw, family: 'other', score: 0, reasons: [], seeds: [] };
+  c.pinned = true; c.reasons = [...new Set([...(c.reasons || []), 'Pinned by you'])];
+  k.candidates = k.candidates.filter(x => x.keyword !== kw);
+  if (!find(k.tracked)) k.tracked.push(c);
+}
+if (action === 'unpin') { const c = find(k.tracked); if (c) { c.pinned = false; c.reasons = (c.reasons || []).filter(r => r !== 'Pinned by you'); } }
+if (action === 'ignore') { k.ignored.push(kw); k.tracked = k.tracked.filter(x => x.keyword !== kw); k.candidates = k.candidates.filter(x => x.keyword !== kw); }
+k.updatedAt = new Date().toISOString();
+return [{ json: { ok: true, keywords: k } }];`);
+  const okUpd = ifTrue(w, "Change OK?", "={{ $json.ok }}");
+  w.chain(upd, kvGet(w, "Read keywords (update)", "keywords"), apply, okUpd);
+  w.link(okUpd, respond(w, "Reject change", "={{ { error: $json.error } }}", 400), 1);
+  const saveUpd = dt(w, "Save change", "sparks_kv", "upsert", { filter: eqFilter("key", "'keywords'"), body: "{key:'keywords',value_object:JSON.stringify($('Apply change').first().json.keywords)}" });
+  w.link(okUpd, saveUpd, 0);
+  w.chain(saveUpd, respond(w, "Return changed", "={{ $('Apply change').first().json.keywords }}"));
+
+  // --- visibility check: weekly + on demand (SerpApi)
+  w.lane(); w.lane();
+  const run = hook(w, "Check now", "POST", "sparks/visibility/run");
+  const weekly = w.add("Weekly (Mon 7am)", "n8n-nodes-base.scheduleTrigger", 1.2, { rule: { interval: [{ field: "weeks", triggerAtDay: [1], triggerAtHour: 7 }] } });
+  const rk2 = kvGet(w, "Read keywords (check)", "keywords");
+  w.link(run, rk2);
+  w.link(weekly, rk2);
+  const budget = w.add("Search budget", "n8n-nodes-base.httpRequest", 4.2, { method: "GET", url: "https://serpapi.com/account.json", authentication: "predefinedCredentialType", nodeCredentialType: "serpApi", options: { timeout: 15000 } }, { credentials: { serpApi: C.serp }, onError: "continueRegularOutput" });
+  const plan = code(w, "Plan check", `
+const k = ${parsedKv("Read keywords (check)")};
+const tracked = (k.tracked || []).slice(0, 8);
+const left = Number($('Search budget').first().json.plan_searches_left ?? $('Search budget').first().json.total_searches_left ?? 0);
+const needed = tracked.length + 1; // one Google Maps search per keyword + Sparks' own listing
+let error = '';
+if (!tracked.length) error = 'No keywords yet. Click "Find keywords" first (it is free).';
+else if (left < needed) error = 'This check needs ' + needed + ' Google searches but only ' + left + ' are left on the free plan this month.';
+return [{ json: { ok: !error, error, needed, left, tracked } }];`);
+  const okPlan = ifTrue(w, "Enough searches?", "={{ $json.ok }}");
+  w.chain(rk2, kvGet(w, "Read settings (check)", "settings"), dt(w, "Read search console (check)", "sparks_gsc", "list", { filter: eqFilter("rangeDays", "'28'"), limit: 1 }), budget, plan, okPlan);
+  const errPortal = ifTrue(w, "Portal asked? (error)", "={{ $('Check now').isExecuted }}");
+  w.link(okPlan, errPortal, 1);
+  w.link(errPortal, respond(w, "Cannot check", "={{ { error: $json.error } }}", 424), 0);
+  const okPortal = ifTrue(w, "Portal asked?", "={{ $('Check now').isExecuted }}");
+  w.link(okPlan, okPortal, 0);
+  const startedResp = respond(w, "Check started", "={{ { ok: true, searches: $json.needed } }}");
+  w.link(okPortal, startedResp, 0);
+  const own = w.add("Find own listing", "n8n-nodes-base.httpRequest", 4.2, {
+    method: "GET",
+    url: "https://serpapi.com/search.json",
+    authentication: "predefinedCredentialType",
+    nodeCredentialType: "serpApi",
+    sendQuery: true,
+    queryParameters: { parameters: [
+      { name: "engine", value: "google_maps" }, { name: "type", value: "search" },
+      { name: "q", value: `={{ (${parsedKv("Read settings (check)")}.businessNameOnGoogle || 'F Sparks & Sons') + ' North Geelong' }}` },
+      { name: "ll", value: BUSINESS_LL }, { name: "hl", value: "en" }, { name: "gl", value: "au" },
+    ] },
+    options: { timeout: 60000 },
+  }, { credentials: { serpApi: C.serp }, executeOnce: true, retryOnFail: true, maxTries: 2, onError: "continueRegularOutput" });
+  w.link(startedResp, own);
+  w.link(okPortal, own, 1);
+  const items = code(w, "Keyword items", "return $('Plan check').first().json.tracked.map(t => ({ json: { keyword: t.keyword, family: t.family, reasons: t.reasons || [] } }));");
+  const m = serpMaps(w, "Search Google Maps", "={{ $json.keyword }}", GEELONG_LL);
+  const compute = code(w, "Work out positions", `${LIB}\n${readFileSync(join(ROOT, "n8n", "code", "vis-compute.js"), "utf8")}`);
+  w.chain(
+    own, items, m, compute,
+    dt(w, "Save check", "sparks_visibility", "insert", { body: "{runId:$json.runId,result_object:JSON.stringify($json)}" }),
+    activity(w, "Log check", "visibility", "'Google visibility checked for ' + $('Work out positions').first().json.rows.length + ' keywords (' + $('Work out positions').first().json.searchesUsed + ' searches)'"),
+  );
+
+  // --- latest two checks (for arrows: up / down since last time)
+  w.lane(); w.lane();
+  w.chain(
+    hook(w, "Get latest", "GET", "sparks/visibility/latest"),
+    dt(w, "Read checks", "sparks_visibility", "list", { limit: 2 }),
+    respond(w, "Return checks", "={{ (() => { const p = (r) => { try { return r ? JSON.parse(r.result_object) : null; } catch (e) { return null; } }; const d = $json.data || []; return { latest: p(d[0]), previous: p(d[1]) }; })() }}"),
+  );
+  return w;
+}
+
 // ================================================================== main
 async function upsertWorkflow(w) {
   const body = { name: w.name, nodes: w.nodes, connections: w.connections, settings: { executionOrder: "v1", saveDataErrorExecution: "all", saveDataSuccessExecution: "all", timezone: "Australia/Melbourne" } };
@@ -912,7 +1048,7 @@ async function main() {
     console.log("workerUrl set");
   }
 
-  for (const build of [portalCore, leadFinder, rankGrid, searchConsole, websiteAudit, contentStudio, reviews]) await upsertWorkflow(build());
+  for (const build of [portalCore, leadFinder, rankGrid, searchConsole, websiteAudit, contentStudio, reviews, googleVisibility]) await upsertWorkflow(build());
   console.log(DRY ? "dry run written to n8n/dist/" : "done");
 }
 

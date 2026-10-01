@@ -73,3 +73,42 @@ export type ContentPost = {
 };
 
 export type ReviewRequest = { id: string | number; createdAt: string; customerName: string; channel: "sms" | "email"; status: string };
+
+export type Keyword = { keyword: string; family: string; score: number; reasons: string[]; seeds?: string[]; pinned?: boolean };
+export type KeywordSet = {
+  updatedAt?: string;
+  tracked?: Keyword[];
+  candidates?: Keyword[];
+  brand?: string[];
+  others?: string[];
+  pinned?: string[];
+  ignored?: string[];
+  sources?: { autocomplete?: string; searchConsole?: string };
+};
+
+export type VisRow = {
+  keyword: string;
+  family: string;
+  reasons: string[];
+  mapRank: number | null;
+  mapTop3: { title: string; type: string; rating: number | null; reviews: number | null }[];
+  winningCategory: string;
+  categoryMatch: boolean | null;
+  categoryIsPrimary: boolean | null;
+  mainWord: string;
+  top3WithWordInName: number;
+  top3AvgReviews: number | null;
+  websiteRank: number | null;
+  websiteClicks: number | null;
+  websiteSource: string;
+  error?: string;
+};
+export type VisCheck = {
+  runId: string;
+  checkedAt: string;
+  location: string;
+  status: string;
+  searchesUsed: number;
+  own: { title: string; types: string[]; primaryType: string; rating: number | null; reviews: number | null; address: string } | null;
+  rows: VisRow[];
+};

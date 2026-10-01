@@ -24,7 +24,7 @@ export const BUSINESS = {
 
 export const NAV = [
   { href: "/", label: "Overview" },
-  { href: "/insights", label: "Why we're not in Maps" },
+  { href: "/google", label: "Google visibility" },
   { href: "/visibility", label: "Maps Rank Grid" },
   { href: "/keywords", label: "Keywords" },
   { href: "/site-health", label: "Website Health" },
