@@ -1,9 +1,10 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { redirect } from "next/navigation";
 import { Card, Hero, Notice, Page, Pill, NotConnected } from "@/components/ui";
 import { n8n, useN8n } from "@/lib/useN8n";
-import { FRANCHISE_BRANDS, LEAD_CATEGORIES, LEAD_RINGS, LEAD_SUBURBS } from "@/lib/site";
+import { FEATURES, FRANCHISE_BRANDS, LEAD_CATEGORIES, LEAD_RINGS, LEAD_SUBURBS } from "@/lib/site";
 import { buildQueries, estimateMinutes, toCsv, type LeadConfig } from "@/lib/leads";
 import type { LeadJob, LeadRow } from "@/lib/types";
 
@@ -35,7 +36,7 @@ function JobProgress({ j }: { j: LeadJob }) {
   );
 }
 
-export default function Leads() {
+function LeadsInner() {
   const jobs = useN8n<LeadJob[]>("leads.jobs", undefined, 10_000);
   const quota = useN8n<{ left?: number; perMonth?: number; plan?: string }>("quota.get");
   const [selected, setSelected] = useState<string | null>(null);
@@ -250,4 +251,11 @@ export default function Leads() {
       </Page>
     </>
   );
+}
+
+
+// Hidden for Sparks (not in the proposal): send anyone who opens /leads back to the overview.
+export default function Leads() {
+  if (!FEATURES.leadFinder) redirect("/");
+  return <LeadsInner />;
 }

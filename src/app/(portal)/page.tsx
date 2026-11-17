@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { Card, Hero, Page, Stat, Pill, Notice } from "@/components/ui";
 import { useN8n } from "@/lib/useN8n";
+import { FEATURES } from "@/lib/site";
 import { analyse, OFFSITE_FINDINGS, type PageAudit } from "@/lib/audit";
 import snapshot from "@/data/sparks-audit-2026-09-28.json";
 import type { ActivityItem, ContentPost, GridJob, GscResult, LeadJob, Settings } from "@/lib/types";
@@ -76,15 +77,17 @@ export default function Overview() {
             state={!connected ? "off" : gsc.data?.rows ? liveState : "off"}
             stateLabel={!connected ? "Not connected" : gsc.data?.rows ? liveLabel : "Not synced"}
           />
+          {FEATURES.leadFinder && (
           <Stat
-            label="Leads found"
-            value="—"
-            count={leadCount === undefined ? undefined : { to: leadCount, separator: "," }}
-            delay={0.18}
-            meaning="Local businesses found by the Lead Finder that may buy trailers, towbars or parts."
-            state={!connected ? "off" : leads.data?.length ? "live" : "off"}
-            stateLabel={!connected ? "Not connected" : leads.data?.length ? "Live" : "No runs yet"}
-          />
+              label="Leads found"
+              value="—"
+              count={leadCount === undefined ? undefined : { to: leadCount, separator: "," }}
+              delay={0.18}
+              meaning="Local businesses found by the Lead Finder that may buy trailers, towbars or parts."
+              state={!connected ? "off" : leads.data?.length ? "live" : "off"}
+              stateLabel={!connected ? "Not connected" : leads.data?.length ? "Live" : "No runs yet"}
+            />
+          )}
           <Stat
             label="Posts awaiting approval"
             value="—"

@@ -22,6 +22,9 @@ export const BUSINESS = {
   serviceArea: ["Geelong", "Bellarine Peninsula", "Surf Coast", "Melbourne"],
 };
 
+// Feature switches. Lead Finder is hidden: Sparks said it is not relevant and it is not in the proposal.
+export const FEATURES = { leadFinder: false } as const;
+
 export const NAV = [
   { href: "/", label: "Overview" },
   { href: "/google", label: "Google visibility" },
@@ -30,9 +33,9 @@ export const NAV = [
   { href: "/site-health", label: "Website Health" },
   { href: "/reviews", label: "Reviews" },
   { href: "/content", label: "Posts & Photos" },
-  { href: "/leads", label: "Lead Finder" },
+  ...(FEATURES.leadFinder ? [{ href: "/leads", label: "Lead Finder" }] : []),
   { href: "/settings", label: "Settings" },
-] as const;
+];
 
 // Keywords the owner actually cares about (from her email + Thryv's tracked list).
 export const DEFAULT_KEYWORDS = [

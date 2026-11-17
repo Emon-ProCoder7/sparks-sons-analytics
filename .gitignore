@@ -46,3 +46,4 @@ worker/data/
 
 .vercel
 .env*
+.n8nq.py
